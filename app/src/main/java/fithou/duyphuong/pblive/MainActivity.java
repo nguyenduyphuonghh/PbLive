@@ -31,6 +31,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.ExecutorService;
 
+import hou.duyphuong.librtmp.core.listener.RESConnectionListener;
 import hou.duyphuong.librtmp.model.RESConfig;
 import hou.duyphuong.librtmp.model.RESCoreParameters;
 import hou.duyphuong.librtmp.model.Size;
@@ -39,7 +40,7 @@ import hou.duyphuong.librtmp.rtmp.RESFlvDataCollecter;
 import hou.duyphuong.librtmp.rtmp.RESRtmpSender;
 import hou.duyphuong.librtmp.tools.LogTools;
 
-public class MainActivity extends AppCompatActivity implements CompoundButton.OnCheckedChangeListener, TextWatcher, View.OnLongClickListener {
+public class MainActivity extends AppCompatActivity implements CompoundButton.OnCheckedChangeListener, TextWatcher, View.OnLongClickListener, RESConnectionListener {
 
     private static final int MULTIPLE_PERMISSIONS = 1;
     String[] permissions = new String[]{
@@ -134,7 +135,7 @@ public class MainActivity extends AppCompatActivity implements CompoundButton.On
 
         if (txtLinkServer.isEmpty() && txtKeyStream.isEmpty()) {
             txtLinkServer = "rtmp://a.rtmp.youtube.com/live2/";
-            txtKeyStream = "mzky-hrjd-gx9e-81bw";
+            txtKeyStream = "em44-rjz5-qh1x-8qjg";
         }
 
         edtKeyStream.setText(txtKeyStream);
@@ -217,6 +218,7 @@ public class MainActivity extends AppCompatActivity implements CompoundButton.On
         coreParameters.rtmpAddr = resConfig.getRtmpAddr();
         coreParameters.printDetailMsg = resConfig.isPrintDetailMsg();
         coreParameters.senderQueueLength = 150;
+
         audioClient = new RESAudioClient(coreParameters);
         if (!audioClient.prepare(resConfig)) {
             LogTools.d("!!!!!audioClient.prepare()failed");
@@ -238,6 +240,7 @@ public class MainActivity extends AppCompatActivity implements CompoundButton.On
             audioClient.start(collecter);
         }
         rtmpSender.start(rtmpAddr);
+        rtmpSender.setConnectionListener(this);
         isStreaming = true;
 
         Toast.makeText(this, "Screen recorder is running...", Toast.LENGTH_SHORT).show();
@@ -273,5 +276,27 @@ public class MainActivity extends AppCompatActivity implements CompoundButton.On
                 break;
         }
         return true;
+    }
+
+    @Override
+    public void onOpenConnectionResult(int result) {
+        if (result == 0) {
+            Toast.makeText(this, "Connected! Server IP = " + rtmpSender.getServerIpAddr(), Toast.LENGTH_SHORT).show();
+        } else {
+            Toast.makeText(this, "Cannot connect to server", Toast.LENGTH_SHORT).show();
+        }
+    }
+
+    @Override
+    public void onWriteError(int errno) {
+        stopScreenRecord();
+        Toast.makeText(this, "Broadcast has been terminated due to connection was lost", Toast.LENGTH_SHORT).show();
+    }
+
+    @Override
+    public void onCloseConnectionResult(int result) {
+        if (result == 0) {
+            Toast.makeText(this, "Broadcast finished", Toast.LENGTH_SHORT).show();
+        }
     }
 }

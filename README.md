@@ -8,7 +8,7 @@ An Android library which help you connect to rtmp server
 + Module app is sample ScreenRecord that demonstrate how to use librtmp.
 + Thanks to Eterrao with <a href="https://github.com/eterrao/ScreenRecorder">ScreenRecorder</a> 
 and LakeinChina with <a href="https://github.com/lakeinchina/librestreaming">Librestreaming</a>.
-
+<br>
 + ScreenRecorder class collects video data from screen
 + RESAudioClient class collects audio data from micro
 <br>

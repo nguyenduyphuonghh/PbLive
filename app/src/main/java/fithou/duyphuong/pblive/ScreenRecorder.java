@@ -28,10 +28,11 @@ import android.view.Surface;
 import java.io.IOException;
 import java.nio.ByteBuffer;
 import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.logging.Handler;
 
-import hou.duyphuong.librtmp.core.Packager;
 import hou.duyphuong.librtmp.rtmp.RESFlvData;
 import hou.duyphuong.librtmp.rtmp.RESFlvDataCollecter;
+import hou.duyphuong.librtmp.rtmp.RESRtmpSender;
 import hou.duyphuong.librtmp.tools.LogTools;
 
 import static hou.duyphuong.librtmp.rtmp.RESFlvData.FLV_RTMP_PACKET_TYPE_VIDEO;
@@ -40,7 +41,7 @@ import static hou.duyphuong.librtmp.rtmp.RESFlvData.FLV_RTMP_PACKET_TYPE_VIDEO;
  * @author Yrom
  * Modified by raomengyang 2017-03-12
  */
-public class    ScreenRecorder extends Thread {
+public class ScreenRecorder extends Thread {
     private static final String TAG = "ScreenRecorder";
 
     private int mWidth;
@@ -50,9 +51,10 @@ public class    ScreenRecorder extends Thread {
     private MediaProjection mMediaProjection;
     // parameters for the encoder
     private static final String MIME_TYPE = "video/avc"; // H.264 Advanced Video Coding
-    private static final int FRAME_RATE = 30; // 30 fps
+    private static final int FRAME_RATE = 60; // 30 fps
     private static final int IFRAME_INTERVAL = 2; // 2 seconds between I-frames
     private static final int TIMEOUT_US = 10000;
+    private final Object syncDstVideoEncoder = new Object();
 
     private MediaCodec mEncoder;
     private Surface mSurface;
@@ -61,6 +63,7 @@ public class    ScreenRecorder extends Thread {
     private MediaCodec.BufferInfo mBufferInfo = new MediaCodec.BufferInfo();
     private VirtualDisplay mVirtualDisplay;
     private RESFlvDataCollecter mDataCollecter;
+    ByteBuffer[] encoderOutputBuffers;
 
     public ScreenRecorder(RESFlvDataCollecter dataCollecter, int width, int height, int bitrate, int dpi, MediaProjection mp) {
         super(TAG);
@@ -89,7 +92,7 @@ public class    ScreenRecorder extends Thread {
                 throw new RuntimeException(e);
             }
             mVirtualDisplay = mMediaProjection.createVirtualDisplay(TAG + "-display",
-                    mWidth, mHeight, mDpi, DisplayManager.VIRTUAL_DISPLAY_FLAG_PUBLIC,
+                    mWidth, mHeight, mDpi, DisplayManager.VIRTUAL_DISPLAY_FLAG_AUTO_MIRROR,
                     mSurface, null, null);
             Log.d(TAG, "created virtual display: " + mVirtualDisplay);
             recordVirtualDisplay();
@@ -141,7 +144,7 @@ public class    ScreenRecorder extends Thread {
                      */
                     if (mBufferInfo.flags != MediaCodec.BUFFER_FLAG_CODEC_CONFIG && mBufferInfo.size != 0) {
                         ByteBuffer realData = mEncoder.getOutputBuffers()[eobIndex];
-                        realData.position(mBufferInfo.offset + 4);
+                        realData.position(mBufferInfo.offset + 4); // +4
                         realData.limit(mBufferInfo.offset + mBufferInfo.size);
                         sendRealData((mBufferInfo.presentationTimeUs / 1000) - startTime, realData);
                     }
@@ -172,43 +175,29 @@ public class    ScreenRecorder extends Thread {
 
 
     private void sendAVCDecoderConfigurationRecord(long tms, MediaFormat format) {
+        // should happen before receiving buffers, and should only happen once
         byte[] AVCDecoderConfigurationRecord = Packager.H264Packager.generateAVCDecoderConfigurationRecord(format);
-        int packetLen = Packager.FLVPackager.FLV_VIDEO_TAG_LENGTH +
-                AVCDecoderConfigurationRecord.length;
+        int packetLen = Packager.FLVPackager.FLV_VIDEO_TAG_LENGTH + AVCDecoderConfigurationRecord.length;
         byte[] finalBuff = new byte[packetLen];
-        Packager.FLVPackager.fillFlvVideoTag(finalBuff,
-                0,
-                true,
-                true,
-                AVCDecoderConfigurationRecord.length);
-        System.arraycopy(AVCDecoderConfigurationRecord, 0,
-                finalBuff, Packager.FLVPackager.FLV_VIDEO_TAG_LENGTH, AVCDecoderConfigurationRecord.length);
+        Packager.FLVPackager.fillFlvVideoTag(finalBuff, 0, true, true, AVCDecoderConfigurationRecord.length);
+        System.arraycopy(AVCDecoderConfigurationRecord, 0, finalBuff, Packager.FLVPackager.FLV_VIDEO_TAG_LENGTH, AVCDecoderConfigurationRecord.length);
         RESFlvData resFlvData = new RESFlvData();
         resFlvData.droppable = false;
         resFlvData.byteBuffer = finalBuff;
         resFlvData.size = finalBuff.length;
         resFlvData.dts = (int) tms;
-        resFlvData.flvTagType = FLV_RTMP_PACKET_TYPE_VIDEO;
+        resFlvData.flvTagType = RESFlvData.FLV_RTMP_PACKET_TYPE_VIDEO;
         resFlvData.videoFrameType = RESFlvData.NALU_TYPE_IDR;
-        mDataCollecter.collect(resFlvData, FLV_RTMP_PACKET_TYPE_VIDEO);
+        mDataCollecter.collect(resFlvData, RESRtmpSender.FROM_VIDEO);
     }
 
     private void sendRealData(long tms, ByteBuffer realData) {
         int realDataLength = realData.remaining();
-        int packetLen = Packager.FLVPackager.FLV_VIDEO_TAG_LENGTH +
-                Packager.FLVPackager.NALU_HEADER_LENGTH +
-                realDataLength;
+        int packetLen = Packager.FLVPackager.FLV_VIDEO_TAG_LENGTH + Packager.FLVPackager.NALU_HEADER_LENGTH + realDataLength;
         byte[] finalBuff = new byte[packetLen];
-        realData.get(finalBuff, Packager.FLVPackager.FLV_VIDEO_TAG_LENGTH +
-                        Packager.FLVPackager.NALU_HEADER_LENGTH,
-                realDataLength);
-        int frameType = finalBuff[Packager.FLVPackager.FLV_VIDEO_TAG_LENGTH +
-                Packager.FLVPackager.NALU_HEADER_LENGTH] & 0x1F;
-        Packager.FLVPackager.fillFlvVideoTag(finalBuff,
-                0,
-                false,
-                frameType == 5,
-                realDataLength);
+        realData.get(finalBuff, Packager.FLVPackager.FLV_VIDEO_TAG_LENGTH + Packager.FLVPackager.NALU_HEADER_LENGTH, realDataLength);
+        int frameType = finalBuff[Packager.FLVPackager.FLV_VIDEO_TAG_LENGTH + Packager.FLVPackager.NALU_HEADER_LENGTH] & 0x1F;
+        Packager.FLVPackager.fillFlvVideoTag(finalBuff, 0, false, frameType == 5, realDataLength);
         RESFlvData resFlvData = new RESFlvData();
         resFlvData.droppable = true;
         resFlvData.byteBuffer = finalBuff;
